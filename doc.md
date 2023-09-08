@@ -388,3 +388,134 @@ then, the client receive the message:
 It is bes practice to not write an intercepted event if you do not need to customize the payload because it will decrease performance in a system with a lot of subscribers.
 
 ### Channel Clients
+Responsabilities of channel clients:
+- Connect to the server and maintain the connection by using a heartbeat.
+- Join the requested topics.
+- Push messages to a topic and optionally handle responses.
+- Receive messages from a topic.
+- Handle disconnection and other errors gracefully; try to maintain a connection whenever possible.
+
+Let's send message with the javascript client.
+Update user_socket.j file to this:
+```js
+import {Socket} from "phoenix"
+
+let socket = new Socket("/socket", {})
+socket.connect()
+
+// Connecto to topic ping.
+let channel = socket.channel("ping", {})
+channel.join()
+  .receive("ok", resp => { console.log("Joined ping", resp) })
+  .receive("error", resp => { console.log("Unable to join ping", resp) })
+
+export default socket
+
+```
+
+We initialize our Socket with the URL that is present in outr Endpoint module (/socket).
+We invoke socket.channel function once per topic we want to connect to. The javascript client will prevent us from connecting to the same topic multiple times on one Socket connection, which prevents duplicate messages.
+
+Start application:
+`iex -S mix phx.server`
+
+then access link:
+`http://localhost:4000`
+
+You will see the message in console tab:
+`Joined ping`
+
+Now, add code at the bottom in user_socket.js to send message to server:
+```js
+// Sending message.
+console.log("send ping")
+channel
+  .push("ping")
+  .receive("ok", resp => console.log("receive", resp.ping))
+```
+
+Refresh the page, and you will see something like this:
+```
+send ping
+Joined ping {}
+receive pong
+```
+
+Note that the ping is sent before our joined reply comes in. In javascript, if the client hasn't connected to the Channel yet, the message will be buffered in memory and sent as soon as the Channel is connected. It is stored in a short-lived(5-second) buffer so that is doesn't immediately fail.
+
+It is a best practice to have error and timeout handlers whenever a message is sent to our Channel.
+Add the following code to user_socket.js fild:
+```js
+// Send pong.
+console.log("send pong")
+channel
+  .push("pong")
+  .receive("ok", resp => console.log("won't happen"))
+  .receive("error", resp => console.error("won't happen yet"))
+  .receive("timeout", resp => console.error("pong message timeout", resp))
+```
+
+Refresh the page and the timeout message will appear.
+
+Now, add code in ping_channel.ex file:
+```elixir
+  def handle_in("param_ping", %{"error" => true}, socket) do
+    {:reply, {:error, %{reason: "You asked for this!"}}, socket}
+  end
+
+  def handle_in("param_ping", payload, socket) do
+    {:reply, {:ok, payload}, socket}
+  end
+```
+
+and in user_socket.js file:
+```js
+channel
+.push("param_ping", {error: true})
+.receive("error", resp => console.error("param_ping error: ", resp))
+
+channel
+  .push("param_ping", {error: false, arr: [1, 2]})
+  .receive("ok", resp => console.log("param_ping ok: ", resp))
+```
+
+Refresh the page and look the logs in console tab.
+
+### Receiving messages from server
+Now, let's implement receiving messages from server.
+In user_socket.js file add a listener:
+```js
+// Listener to listen send_ping event..
+channel.on("send_ping", payload => {
+  console.log("ping requested", payload)
+  channel.push("ping")
+    .receive("ok", resp => console.log("ping: ", resp.ping))
+})
+```
+
+In console, run:
+`HelloSocketsWeb.Endpoint.broadcast("ping", "request_ping", %{})`
+
+This will cause a message to be pushed to all connected clients on the "ping" topic. Our hadle_out function changes the original request_ping payload into a different message. You can see the final result in the developer console.
+
+```
+ping requested {from_node: 'nonode@nohost'}
+ping:  pong
+```
+
+When we open multiple web pages, the broadcast message will be sent to all pages. Replies, on the other hand, will only be sent to the client thate sent the message.
+
+### Client fault tolerance and error handling
+When you stop the server, errors messages will appear in browser console tab. When server restarts the javascript client join to the topic again.
+
+Add code in user_socket.js:
+```js
+// Send invalid event.
+channel
+  .push("invalid")
+  .receive("ok", resp => console.log("won't happen"))
+  .receive("error", resp => console.error("won't happen yet"))
+  .receive("timeout", resp => console.error("invalid event timeout", resp))
+```
+
+With it, the erro message will appear in iex console.

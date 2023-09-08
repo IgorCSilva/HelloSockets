@@ -6,7 +6,8 @@ import {Socket} from "phoenix"
 
 // And connect to the path in "lib/hello_sockets_web/endpoint.ex". We pass the
 // token for authentication. Read below how it should be used.
-let socket = new Socket("/socket", {params: {token: window.userToken}})
+let socket = new Socket("/socket", {})
+// let socket = new Socket("/socket", {params: {token: window.userToken}})
 
 // When you connect, you'll often need to authenticate the client.
 // For example, imagine you have an authentication plug, `MyAuth`,
@@ -56,9 +57,51 @@ socket.connect()
 // Now that you are connected, you can join channels with a topic.
 // Let's assume you have a channel with a topic named `room` and the
 // subtopic is its id - in this case 42:
-let channel = socket.channel("room:42", {})
+// let channel = socket.channel("room:42", {})
+// channel.join()
+//   .receive("ok", resp => { console.log("Joined successfully", resp) })
+//   .receive("error", resp => { console.log("Unable to join", resp) })
+
+let channel = socket.channel("ping", {})
 channel.join()
-  .receive("ok", resp => { console.log("Joined successfully", resp) })
-  .receive("error", resp => { console.log("Unable to join", resp) })
+  .receive("ok", resp => { console.log("Joined ping", resp) })
+  .receive("error", resp => { console.log("Unable to join ping", resp) })
+
+// Listener.
+channel.on("send_ping", payload => {
+  console.log("ping requested", payload)
+  channel.push("ping")
+    .receive("ok", resp => console.log("ping: ", resp.ping))
+})
+
+// Sending message.
+console.log("send ping")
+channel
+  .push("ping")
+  .receive("ok", resp => console.log("receive", resp.ping))
+
+// Send pong.
+console.log("send pong")
+channel
+  .push("pong")
+  .receive("ok", resp => console.log("won't happen"))
+  .receive("error", resp => console.error("won't happen yet"))
+  .receive("timeout", resp => console.error("pong message timeout", resp))
+
+channel
+.push("param_ping", {error: true})
+.receive("error", resp => console.error("param_ping error: ", resp))
+
+channel
+  .push("param_ping", {error: false, arr: [1, 2]})
+  .receive("ok", resp => console.log("param_ping ok: ", resp))
+
+
+// // Send invalid event.
+// channel
+//   .push("invalid")
+//   .receive("ok", resp => console.log("won't happen"))
+//   .receive("error", resp => console.error("won't happen yet"))
+//   .receive("timeout", resp => console.error("invalid event timeout", resp))
 
 export default socket
