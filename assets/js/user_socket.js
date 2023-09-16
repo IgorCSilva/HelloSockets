@@ -104,4 +104,12 @@ channel
 //   .receive("error", resp => console.error("won't happen yet"))
 //   .receive("timeout", resp => console.error("invalid event timeout", resp))
 
+// Authentication.
+const authSocket = new Socket("/auth_socket", {
+  params: {token: window.authToken}
+})
+
+authSocket.onOpen(() => console.log('authSocket connected'))
+authSocket.connect()
+
 export default socket
