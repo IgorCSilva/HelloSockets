@@ -112,4 +112,23 @@ const authSocket = new Socket("/auth_socket", {
 authSocket.onOpen(() => console.log('authSocket connected'))
 authSocket.connect()
 
+
+// // Subscription to RecurringChannel.
+// const recurringChannel = authSocket.channel("recurring")
+
+// recurringChannel.on("new_token", (payload) => {
+//   console.log("received new auth token", payload)
+// })
+
+// recurringChannel.join()
+
+// Dedupe pattern.
+const dupeChannel = socket.channel("dupe")
+
+dupeChannel.on("number", (payload) => {
+  console.log("new number received", payload)
+})
+
+dupeChannel.join()
+
 export default socket

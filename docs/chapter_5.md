@@ -134,3 +134,153 @@ Finally, in the client terminal we can see:
 
 ### Challenges with Distributed Channels
 Our clients may disconnect from a node and end up on a different node with different internal state. We must accommodate this by having a central source of truth that any node can reference; this is most commonly a shared database.
+
+## Customize Channel Behavior
+A Phoenix Channel is backed by a GenServer that lets it receive messages and store state.
+
+### Send a Recurring Message
+Implementation to send message periodically.
+
+Add a new recurring Channel route to the AuthSocket module.
+- in auth_socket.ex
+```elixir
+  channel "recurring", HelloSocketsWeb.RecurringChannel
+```
+
+Now, create the Recurring Channel.
+- in recurring_channel.ex file:
+```elixir
+defmodule HelloSocketsWeb.RecurringChannel do
+  use Phoenix.Channel
+  
+  @send_after 5_000
+  
+  def join(_topic, _payload, socket) do
+    schedule_send_token()
+    {:ok, socket}
+  end
+  
+  defp schedule_send_token do
+    Process.send_after(self(), :send_token, @send_after)
+  end
+  
+  def handle_info(:send_token, socket) do
+    schedule_send_token()
+    push(socket, "new_token", %{token: new_token(socket)})
+  end
+  
+  defp new_token(socket = %{assigns: %{user_id: user_id}}) do
+    Phoenix.Token.sign(socket, "salt identifier", user_id)
+  end
+end
+```
+
+Now let's add a subscription to RecurringChannel in our JavaScript.
+- in user_socket.js file:
+```javascript
+// Subscription to RecurringChannel.
+const recurringChannel = authSocket.channel("recurring")
+
+recurringChannel.on("new_token", (payload) => {
+  console.log("received new auth token", payload)
+})
+
+recurringChannel.join()
+```
+
+Refresh your web page and see the logs.
+
+### Deduplicate Outgoing Messages
+We'll be using Socket.assigns to store state that is relevant to our Channel.
+Any data that we add to Socket.assigns is for our Channel process only and won't be seen by other Channel processes, even Channels that use the same Socket. It is possible because Elixir is functional and generally side-effect free. If we modify the state of a Channel process, other processes in the system are not affected.
+
+Add a new Channel route:
+- in user_socket.ex file:
+```elixir
+  channel "dupe", HelloSocketsWeb.DedupeChannel
+```
+
+Create Channel file.
+- in dedupe_channel.ex file:
+```elixir
+defmodule HelloSocketsWeb.DedupeChannel do
+  use Phoenix.Channel
+  intercept ["number"]
+
+  def join(_topic, _payload, socket) do
+    {:ok, socket}
+  end
+
+  def handle_out("number", %{number: number}, socket) do
+    buffer = Map.get(socket.assigns, :buffer, [])
+    next_buffer = [number | buffer]
+
+    next_socket =
+      socket
+      |> assign(:buffer, next_buffer)
+      |> enqueue_send_buffer()
+
+    {:noreply, next_socket}
+  end
+
+  # The state awaiting_buffer? is used to prevent multiple send_buffer messages from being enqueued during a single time period.
+  defp enqueue_send_buffer(socket = %{assigns: %{awaiting_buffer?: true}}) do
+    socket
+  end
+  defp enqueue_send_buffer(socket) do
+    Process.send_after(self(), :send_buffer, 1_000)
+    assign(socket, :awaiting_buffer?, true)
+  end
+
+  def handle_info(:send_buffer, socket = %{assigns: %{buffer: buffer}}) do
+    buffer
+    |> Enum.reverse()
+    |> Enum.uniq()
+    |> Enum.each(&push(socket, "number", %{value: &1}))
+
+    next_socket =
+      socket
+      |> assign(:buffer, [])
+      |> assign(:awaiting_buffer?, false)
+
+    {:noreply, next_socket}
+
+  end
+
+  def broadcast(numbers, times) do
+    Enum.each(1..times, fn _ ->
+      Enum.each(numbers, fn number ->
+        HelloSocketsWeb.Endpoint.broadcast!("dupe", "number", %{number: number})
+      end)
+    end)
+  end
+end
+```
+
+We broadcast a single message for each number. This means that every broadcast causes handle_out to be called a single time. If we enqueue [1, 2] 20 times, then there would be 40 broadcasts handled by the Channel.
+
+Add a client in user_socket.js:
+```javascript
+const dupeChannel = socket.channel("dupe")
+
+dupeChannel.on("number", (payload) => {
+  console.log("new number received", payload)
+})
+
+dupeChannel.join()
+```
+
+Now, start the server:
+`iex -S mix phx.server`
+
+In terminal, execute:
+`HelloSocketsWeb.DedupeChannel.broadcast([1, 2, 3], 100)`
+
+In console we can see the result:
+
+new number received Object { value: 1 }
+new number received Object { value: 2 }
+new number received Object { value: 3 }
+
+
+## Write Tests
