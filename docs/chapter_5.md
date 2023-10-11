@@ -368,3 +368,98 @@ end
 
 In this id test, we use a successful Socket connection to verify that the Socket is identified with the user ID authentication information.
 Adding IO.inspect(socket) at the the end of this test you will see `assigns: %{user_id: 2}`.
+
+### Testing Channels
+Channels contain much more application logic than Sockets do.
+
+Let's add test for our WildcardChannel's custom 'join' implementation. Then we will test that a message can be received and replied.
+- in /test/hello_sockets_web/channels/wildcard_channel_test.exs add:
+```elixir
+defmodule HelloSocketsWeb.WildcardChannelTest do
+  use HelloSocketsWeb.ChannelCase
+
+  alias HelloSocketsWeb.UserSocket
+
+  describe "join/3 success" do
+    test "ok when numbers in the format a:b where b = 2a" do
+
+      # We use subscribe_and_join/3 to join the given topic with certain params.
+      assert {:ok, _, %Phoenix.Socket{}} =
+        socket(UserSocket, nil, %{})
+        |> subscribe_and_join("wild:2:4", %{})
+
+      assert {:ok, _, %Phoenix.Socket{}} =
+        socket(UserSocket, nil, %{})
+        |> subscribe_and_join("wild:100:200", %{})
+    end
+  end
+
+  describe "join/3 error" do
+    test "error when b is not exactly twice a" do
+      assert {:error, %{}} ==
+        socket(UserSocket, nil, %{})
+        |> subscribe_and_join("wild:1:3", %{})
+    end
+
+    test "error when 3 numbers are provided" do
+      assert {:error, %{}} ==
+        socket(UserSocket, nil, %{})
+        |> subscribe_and_join("wild:2:4:8", %{})
+    end
+  end
+
+  describe "join/3 error causing crash" do
+    test "error with an invalid format topic" do
+      assert {:error, %{}} ==
+        socket(UserSocket, nil, %{})
+        |> subscribe_and_join("wild:invalid", %{})
+    end
+  end
+end
+```
+
+One test will fail. To get it green, we change the wildcard_channel code to:
+```elixir
+  
+  ...
+
+  defp numbers_correct?(numbers) do
+    numbers
+    |> String.split(":")
+    |> Enum.map(fn data ->
+      case Float.parse(data) do
+        {number, ""} -> number
+        _ -> :error
+      end
+    end)
+    |> case do
+      [a, b] when b == a * 2 and is_number(a) and is_number(b) -> true
+      _ -> false
+    end
+  end
+
+  ...
+
+```
+
+Our next test will ensure that our Channels respond to "ping" events with a "pong" response:
+```elixir
+  ...
+
+  describe "handle_in pong" do
+    test "a pong response is provided" do
+      assert {:ok, _, socket} =
+        socket(UserSocket, nil, %{})
+        |> subscribe_and_join("wild:2:4", %{})
+
+      # Send ping event.
+      ref = push(socket, "ping", %{})
+      reply = %{ping: "pong"}
+
+      assert_reply ref, :ok, ^reply
+    end
+  end
+
+```
+
+### Testing DedupeChannel
