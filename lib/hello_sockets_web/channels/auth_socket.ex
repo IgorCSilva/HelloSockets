@@ -20,7 +20,7 @@ defmodule HelloSocketsWeb.AuthSocket do
     end
   end
 
-  def connect(_, socket) do
+  def connect(_, _socket, _connect_info) do
     Logger.error("#{__MODULE__} connect error missing params")
     :error
   end

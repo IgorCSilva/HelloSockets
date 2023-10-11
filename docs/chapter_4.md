@@ -29,7 +29,7 @@ defmodule HelloSocketsWeb.AuthSocket do
   channel "ping", HelloSocketsWeb.PingChannel
   channel "tracked", HelloSocketsWeb.TrackedChannel
   
-  def connect(%{"token" => token}, socket) do
+  def connect(%{"token" => token}, socket, _connect_info) do
     case verify(socket, token) do
       {:ok, user_id} ->
         socket = assign(socket, :user_id, user_id)
@@ -40,7 +40,7 @@ defmodule HelloSocketsWeb.AuthSocket do
     end
   end
   
-  def connect(_, socket) do
+  def connect(_, _socket, _connect_info) do
     Logger.error("#{__MODULE__} connect error missing params")
     :error
   end
