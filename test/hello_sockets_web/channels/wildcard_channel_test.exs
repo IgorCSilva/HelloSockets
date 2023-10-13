@@ -46,6 +46,7 @@ defmodule HelloSocketsWeb.WildcardChannelTest do
         |> subscribe_and_join("wild:2:4", %{})
 
       # Send ping event.
+      # The reference is simply a unique value that ensures the reply is sent correctly.
       ref = push(socket, "ping", %{})
       reply = %{ping: "pong"}
 

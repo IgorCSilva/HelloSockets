@@ -453,6 +453,7 @@ Our next test will ensure that our Channels respond to "ping" events with a "pon
         |> subscribe_and_join("wild:2:4", %{})
 
       # Send ping event.
+      # The reference is simply a unique value that ensures the reply is sent correctly.
       ref = push(socket, "ping", %{})
       reply = %{ping: "pong"}
 
@@ -463,3 +464,10 @@ Our next test will ensure that our Channels respond to "ping" events with a "pon
 ```
 
 ### Testing DedupeChannel
+Our tests will use message broadcasting to and from the DedupChannel.
+
+Let's start with tests to check that our Channel state changes when we broadcast a new number to our Channel.
+- in test/hello_sockets_web/channels/dedupe_channel_test.exs add:
+```elixir
+
+```
