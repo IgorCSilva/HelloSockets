@@ -131,4 +131,19 @@ dupeChannel.on("number", (payload) => {
 
 dupeChannel.join()
 
+// Connect to stats socket.
+const statsSocket = new Socket("/stats_socket", {})
+statsSocket.connect()
+
+const statsChannelInvalid = statsSocket.channel("invalid")
+statsChannelInvalid.join()
+  .receive("error", () => statsChannelInvalid.leave())
+
+const statsChannelValid = statsSocket.channel("valid")
+statsChannelValid.join()
+
+for (let i = 0; i < 5; i++) {
+  statsChannelValid.push("ping")
+}
+
 export default socket

@@ -67,3 +67,7 @@ config :phoenix, :plug_init_mode, :runtime
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+# Statix and StatsD configuration.
+config :statsd_logger, port: 8126
+config :statix, HelloSockets.Statix, port: 8126
