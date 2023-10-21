@@ -154,3 +154,135 @@ StatsD metric: stats_channel.ping 831|ms
 
 
 ## Keep Your Channels Asynchronous
+
+Elixir is a parallel execution machine. Each Channel can leverage the principles of OTP design to execute work in parallel with other Channels, since the BEAM executes multiple processes at once.
+
+We'll leverage our existing StatsChannel to see the effect of process slowness.
+Let's add a new message handler that responds very slowly.
+
+- in lib/hello_sockets_web/channels/stats_channel.exs:
+```elixir
+def handle_in("slow_ping", _payload, socket) do
+  Process.sleep(3_000)
+  {:reply, {:ok, %{ping: "pong"}}, socket}
+end
+```
+
+Then, add in the client user_socket.js:
+```javascript
+const slowStatsSocket = new Socket("/stats_socket", {})
+slowStatsSocket.connect()
+
+const slowStatsChannel = slowStatsSocket.channel("valid")
+slowStatsChannel.join()
+
+for (let i = 0; i < 5; i++) {
+  slowStatsChannel.push("slow_ping")
+    .receive("ok", () => console.log("Slow ping response received", i))
+    .receive("error", (error) => console.log("Error for request", i, error))
+    .receive("timeout", resp => console.error("pong message timeout", resp))
+}
+
+console.log("5 slow pings requested")
+```
+
+Notice that all only some messages will receive a response. The others can receive the timeout response. This means there is no parallelism present, even though we're using one of the most parallell languages available.
+
+The root cause of this proble is that our Channel is a single process that can handle only one message at a time. Whan a message is slow to process, other messages in the queue have to await for it to complete.
+
+Phoenix provides a solution for this problem. We'll use Phoenix's socket_ref/1 function to turn our Socket into a minimally represented format that can be passed around.
+
+- in lib/hello_sockets_web/channels/stats_channel.ex, add:
+```elixir
+def handle_in("parallel_slow_ping", _payload, socket) do
+  ref = socket_ref(socket)
+
+  Task.start_link(fn ->
+    Process.sleep(3_000)
+    Phoenix.Channel.reply(ref, {:ok, %{ping: "pong"}})
+  end)
+
+  {:noreply, socket}
+end
+```
+
+We spawn a linked Task that starts a new process and executes the given function.
+Task is used to get a Process up and running very quickly. In practice, however, you'll probably e calling into a GenServer.
+Finally, we use Phoenix.Channel.reply/2 to send a response to eh Socket.
+
+Let's copy and update client code to use our asynchronous Channel:
+- in hello_sockets/assets/js/user_socket.js:
+```javascript
+const fastStatsSocket = new Socket("/stats_socket", {})
+fastStatsSocket.connect()
+
+const fastStatsChannel = fastStatsSocket.channel("valid")
+fastStatsChannel.join()
+
+for (let i = 0; i < 5; i++) {
+  fastStatsChannel.push("parallel_slow_ping")
+    .receive("ok", () => console.log("Parallel slow ping response received", i))
+    .receive("error", (error) => console.log("Error for request", i, error))
+    .receive("timeout", resp => console.error("pong message timeout", resp))
+}
+
+console.log("5 parallel slow pings requested")
+```
+
+You will see now all fivve messages load after a three-second wait.
+
+You shouldn't reach for reply/2 for all of you Channels right away. If you have a use case where a potentially slow database query is being called, or if you are leveraging a external API, then it's a good fit. We have seen the benefit of using reply/2 of increased parallelism. A trade-of, thoug, is that we lose the ability to slow down a client (back-pressure) if it is asking too much of our system.
+
+## Build a Scalable Data Pipeline
+
+The mechanism that handles outgoing real-time data is a data pipeline.
+A data pipeline should have certain traits in order to work quickly and reliable for our users.
+Let's use the Elixir library GenStage to build a completely in-memory data pipeline.
+
+### Traits of a data pipeline
+
+- Deliver messages to all relevant clients
+
+This means thatt a real-time event will be broadcast to all our connected Nodes in our data pipeline so they can handle the event for connected Channels. Phoenx PubSub handles this for us, but we must consider that our data pipeline spans multiple servers. We should never send incorrect data to a client.
+
+- Fast data delivery
+
+This allows a client to get the latest information immediately.
+
+- As durable as needed
+
+- As concurrent as needed
+
+Our data pipeline should have limited concurrency so we don't overwhelm our application.
+
+- Measurable
+
+It's important that we know how long it takes to send data to clients.
+
+A good solution for many use cases is a queue-based, GenStage-powered data pipeline. This pipeline exhibits the above traits while also being ease to configure.
+
+### GenStage Powered Pipeline
+
+GenStage helps us write a data ppeline that can exchange data from producers to consumers.
+
+The two main stages types:
+- Producer: Coordinates the feching of data items and then passes to the next consumer stage. Producers can fech data from a database, or they can keep it in memory.
+- Consumer: Asks for and receives data items form the previous producer stage. These items are then processed by our code before more items are received.
+
+The pipeline that well end up with at the end of this chapter is generic and can be used for many use cases.
+
+The schema configuration:
+
+Aplication Process (1) --add_item--> GenStage Producer Process (items[]) as PP
+Aplication Process (2) --add_item--> PP
+
+GenStage Consumer Process as CP --ask_items--> PP
+PP --give_items--> CP
+
+Any process in our application will be able to write new items ot the GenStage producer process.
+
+In hello_sockets/mix.exs, add:
+```elixir
+:gen_stage, "~> 0.14.1"
+```
+
