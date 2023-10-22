@@ -162,20 +162,36 @@ socket.connect()
 
 // console.log("5 slow pings requested")
 
-// Fast executions.
-const fastStatsSocket = new Socket("/stats_socket", {})
-fastStatsSocket.connect()
+// // Fast executions.
+// const fastStatsSocket = new Socket("/stats_socket", {})
+// fastStatsSocket.connect()
 
-const fastStatsChannel = fastStatsSocket.channel("valid")
-fastStatsChannel.join()
+// const fastStatsChannel = fastStatsSocket.channel("valid")
+// fastStatsChannel.join()
 
-for (let i = 0; i < 5; i++) {
-  fastStatsChannel.push("parallel_slow_ping")
-    .receive("ok", () => console.log("Parallel slow ping response received", i))
-    .receive("error", (error) => console.log("Error for request", i, error))
-    .receive("timeout", resp => console.error("pong message timeout", resp))
-}
+// for (let i = 0; i < 5; i++) {
+//   fastStatsChannel.push("parallel_slow_ping")
+//     .receive("ok", () => console.log("Parallel slow ping response received", i))
+//     .receive("error", (error) => console.log("Error for request", i, error))
+//     .receive("timeout", resp => console.error("pong message timeout", resp))
+// }
 
-console.log("5 parallel slow pings requested")
+// console.log("5 parallel slow pings requested")
+
+// Push data to a particular user and use GenStage producer and consumer.
+const authSocket = new Socket("/auth_socket", {
+  params: {token: window.authToken}
+})
+
+authSocket.onOpen(() => console.log('authSocket connected'))
+authSocket.connect()
+
+const authUserChannel = authSocket.channel(`user:${window.userId}`)
+
+authUserChannel.on("push", (payload) => {
+  console.log("received auth user push", payload)
+})
+
+authUserChannel.join()
 
 export default socket

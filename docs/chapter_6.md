@@ -286,3 +286,256 @@ In hello_sockets/mix.exs, add:
 :gen_stage, "~> 0.14.1"
 ```
 
+Run `mix deps.get`.
+
+Now, create a basic Producer module:
+- in lib/hello_sockets/pipelne/producer.ex, add:
+```elixir
+defmodule HelloSockets.Pipeline.Producer do
+  use GenStage
+
+  def start_link(opts) do
+    {[name: name], opts} = Keyword.split(opts, [:name])
+    GenStage.start_link(__MODULE__, opts, name: name)
+  end
+
+  def init(_opts) do
+    {:producer, :unused, buffer_size: 10_000}
+  end
+
+  def handle_demand(_demand, state) do
+    {:noreply, [], state}
+  end
+
+  def push(item = %{}) do
+    GenStage.cast(__MODULE__, {:notify, item})
+  end
+
+  def handle_cast({:notify, item}, state) do
+    {:noreply, [%{item: item}], state}
+  end
+end
+```
+
+And now, the Consumer.
+- in lib/hello_sockets/pipelne/consumer.ex, add:
+```elixir
+defmodule HelloSockets.Pipeline.Consumer do
+  use GenStage
+
+  def start_link(opts) do
+    GenStage.start_link(__MODULE__, opts)
+  end
+
+  def init(opts) do
+    subscribe_to = Keyword.get(opts, :subscribe_to, HelloSockets.Pipeline.Producer)
+    {:consumer, :unused, subscribe_to: subscribe_to}
+  end
+
+  # Every condumer must have a callback function to handle items.
+  def handle_events(items, _from, state) do
+    IO.inspect(
+      {__MODULE__, length(items), List.first(items), List.last(items)}
+    )
+
+    {:noreply, [], state}
+  end
+end
+```
+
+The last stage is to configure our prducer and consumer in our application tree.
+- in lib/hello_sockets/application.ex, add:
+```elixir
+
+  alias HelloSockets.Pipeline.{Consumer, Producer}
+
+  ...
+  
+    children = [
+      ...
+      {Producer, name: Producer},
+      {Consumer, subscribe_to: [{Producer, max_demand: 10, min_demand: 5}]},
+      HelloSocketsWeb.Endpoint
+    ]
+
+  ...
+```
+
+We add each stage to our application before our Endpoint boots. This is very important because we want our data pipeline to be available before our web endpoints are available.
+The min/max demand option helps us configure our pipeline to only process a few items at a time. This should be configured to a low value for in-memory workloads. It is better to have higjer values if using an external data store as this reduces the number of times we go to the external data store.
+
+Let's see what happens when we push itms into our producer.
+
+Run `iex -S mix`.
+```
+iex(1)> alias HelloSockets.Pipeline.Producer
+HelloSockets.Pipeline.Producer
+iex(2)> Producer.push(%{})
+:ok
+iex(3)> {HelloSockets.Pipeline.Consumer, 1, %{item: %{}}, %{item: %{}}}
+
+iex(4)> Enum.each((1..53), &Producer.push(%{n: &1}))
+{HelloSockets.Pipeline.Consumer, 1, %{item: %{n: 1}}, %{item: %{n: 1}}}
+:ok
+{HelloSockets.Pipeline.Consumer, 1, %{item: %{n: 2}}, %{item: %{n: 2}}}
+iex(5)> {HelloSockets.Pipeline.Consumer, 1, %{item: %{n: 3}}, %{item: %{n: 3}}}
+{HelloSockets.Pipeline.Consumer, 1, %{item: %{n: 4}}, %{item: %{n: 4}}}
+{HelloSockets.Pipeline.Consumer, 1, %{item: %{n: 5}}, %{item: %{n: 5}}}
+{HelloSockets.Pipeline.Consumer, 1, %{item: %{n: 6}}, %{item: %{n: 6}}}
+{HelloSockets.Pipeline.Consumer, 1, %{item: %{n: 7}}, %{item: %{n: 7}}}
+{HelloSockets.Pipeline.Consumer, 1, %{item: %{n: 8}}, %{item: %{n: 8}}}
+{HelloSockets.Pipeline.Consumer, 1, %{item: %{n: 9}}, %{item: %{n: 9}}}
+{HelloSockets.Pipeline.Consumer, 5, %{item: %{n: 10}}, %{item: %{n: 14}}}
+{HelloSockets.Pipeline.Consumer, 5, %{item: %{n: 15}}, %{item: %{n: 19}}}
+{HelloSockets.Pipeline.Consumer, 5, %{item: %{n: 20}}, %{item: %{n: 24}}}
+{HelloSockets.Pipeline.Consumer, 5, %{item: %{n: 25}}, %{item: %{n: 29}}}
+{HelloSockets.Pipeline.Consumer, 5, %{item: %{n: 30}}, %{item: %{n: 34}}}
+{HelloSockets.Pipeline.Consumer, 5, %{item: %{n: 35}}, %{item: %{n: 39}}}
+{HelloSockets.Pipeline.Consumer, 5, %{item: %{n: 40}}, %{item: %{n: 44}}}
+{HelloSockets.Pipeline.Consumer, 5, %{item: %{n: 45}}, %{item: %{n: 49}}}
+{HelloSockets.Pipeline.Consumer, 4, %{item: %{n: 50}}, %{item: %{n: 53}}}
+```
+
+You see the grouping of messages. The consumer starts by processing one item at a time. After ten are processed, the items are processed five at a time until the items are all processed.
+
+This pattern appears a bit unusual because we never see ten items processed at once, and we also see many single itms processed. A GenStage consumer splits events into batches based on the max and min demand. Our values are ten and five, so the events are split into a max batch size of five. The single items are an implementation detail of how the batching works - this isn't a big deal for a real application.
+
+### Adding Concurrency and Channels
+GenStage has a solution for adding concurrency to aour pipeline with the ConsumerSupervisor module.
+ConsumerSupervisor is a type of GenStage consumer that spawns a child process for each item received.
+Spawns processes is cheap to do in Elixir.
+
+Our final result in this chapter will look like this:
+
+Aplication Process (1) --add_item--> GenStage Producer Process (items[]) as PP
+Aplication Process (2) --add_item--> PP
+
+GenStage Consumer Process as CP --ask_items--> PP
+PP --give_items--> CP
+
+CP --> (Dynamic Worker Process[])
+
+Create a ConsumerSupervisor and add to our pipeline.
+- in lib/hello_sockets/pipeline/consumer_supervisor.ex:
+```elixir
+defmodule HelloSockets.Pipeline.ConsumerSupervisor do
+  use ConsumerSupervisor
+
+  alias HelloSockets.Pipeline.{Producer, Worker}
+
+  def start_link(opts) do
+    ConsumerSupervisor.start_link(__MODULE__, opts)
+  end
+
+  def init(opts) do
+    subscribe_to = Keyword.get(opts, :subscribe_to, Producer)
+    supervisor_opts = [strategy: :one_for_one, subscribe_to: subscribe_to]
+
+    children = [
+      %{
+        id: Worker,
+        start: {Worker, :start_link, []},
+        restart: :transient
+      }
+    ]
+
+    ConsumerSupervisor.init(children, supervisor_opts)
+  end
+end
+```
+
+It is a mix of common Supervisor and Consumer process setup.
+
+Now, replace the previous Producer and Consumer alias with our new module.
+
+- in lib/hello_sockets/application.ex:
+```elixir
+
+  alias HelloSockets.Pipeline.Producer
+  alias HelloSockets.Pipeline.ConsumerSupervisor, as: Consumer
+
+  ...
+```
+
+Define the Worker module now.
+- in lib/hello_sockets/pipeline/worker.ex:
+```elixir
+defmodule HelloSockets.Pipeline.Worker do
+
+  def start_link(item) do
+    Task.start_link(fn ->
+      process(item)
+    end)
+  end
+
+  defp process(item) do
+    IO.inspect(item)
+    Process.sleep(1000)
+  end
+end
+```
+
+Let's observe what happens when we push work through our pipeline:
+
+Run `iex -S mix`.
+```
+iex(1)> Enum.each((1..50), &HelloSockets.Pipeline.Producer.push(%{n: &1}))
+:ok
+
+iex(2)> %{item: %{n: 1}}
+%{item: %{n: 2}}
+%{item: %{n: 3}}
+%{item: %{n: 5}}
+%{item: %{n: 6}}
+%{item: %{n: 4}}
+%{item: %{n: 7}}
+%{item: %{n: 8}}
+%{item: %{n: 9}}
+%{item: %{n: 10}}
+%{item: %{n: 11}}
+%{item: %{n: 12}}
+
+...
+
+```
+
+You'll see that the jobs run ten at a time with a delay in between. The items always group together the same way, but the group itself can come in any order.
+The GenStage batch size hasn't changed, but the ConsumerSupervisor is able to start up max_demand (ten) workers at a time.
+
+Let's change our Worker module to do some real work. We'll push items for a particular user from our server to our AuthChannel.
+Replace the process/1 function with the following code:
+```elixir
+  defp process(%{item: %{data: data, user_id: user_id}}) do
+    Process.sleep(1000)
+    HelloSocketsWeb.Endpoint.broadcast!("user:#{user_id}", "push", data)
+  end
+```
+
+The pushed data and user ID are passed via the data pipeline item.
+
+The final step is to connect to our private user topic and listen for the push event.
+- in hello_sockets/assets/js/user_socket.js:
+```javascript
+// Push data to a particular user and use GenStage producer and consumer.
+const authSocket = new Socket("/auth_socket", {
+  params: {token: window.authToken}
+})
+
+authSocket.onOpen(() => console.log('authSocket connected'))
+authSocket.connect()
+
+const authUserChannel = authSocket.channel(`user:${window.userId}`)
+
+authUserChannel.on("push", (payload) => {
+  console.log("received auth user push", payload)
+})
+
+authUserChannel.join()
+```
+
+Start the server with `iex -S mix phx.server` and load `http://localhost:4000`.
+
+Execute the code below and observe the browser console.
+If you change the user id in server, the data won't be delivered to the browser client.
+
+### Measuring our Pipeline
