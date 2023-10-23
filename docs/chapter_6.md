@@ -539,3 +539,162 @@ Execute the code below and observe the browser console.
 If you change the user id in server, the data won't be delivered to the browser client.
 
 ### Measuring our Pipeline
+Replace our current Worker.start_link function with this new timed one:
+```elixir
+  def start_link(item) do
+    Task.start_link(fn ->
+      HelloSockets.Statix.measure("pipeline.worker.process_time", fn ->
+        process(item)
+      end)
+    end)
+  end
+```
+
+Now, let's start by writing the current time when an item is added to our pipeline.
+- in lib/hello_sockets/pipeline/timing.ex:
+```elixir
+defmodule HelloSockets.Pipeline.Timing do
+
+  def unix_ms_now() do
+    :erlang.system_time(:millisecond)
+  end
+end
+```
+
+And now, in Producer, add the current time to the item.
+```elixir
+  alias HelloSockets.Pipeline.Timing
+
+  def push_timed(item = %{}) do
+    GenStage.cast(__MODULE__, {:notify_timed, item, Timing.unix_ms_now()})
+  end
+  
+  def handle_cast({:notify_timed, item, unix_ms}, state) do
+    {:noreply, [%{item: item, enqueued_at: unix_ms}], state}
+  end
+```
+
+Change the Worker to pass enqueued_at in the broadcasted message.
+```elixir
+  defp process(%{
+    item: %{data: data, user_id: user_id},
+    enqueued_at: unix_ms
+  }) do
+    HelloSocketsWeb.Endpoint.broadcast!("user:#{user_id}", "push_timed", %{
+      data: data,
+      at: unix_ms
+    })
+  end
+```
+
+We'll make a change to intercept the outgoing message "push_timed" in order to add measurements.
+- in lib/hello_sockets_web/channels/auth_channel.ex:
+```elixir
+  intercept ["push_timed"]
+
+  alias HelloSockets.Pipeline.Timing
+
+
+  def handle_out("push_timed", %{data: data, at: enqueued_at}, socket) do
+    push(socket, "push_timed", data)
+
+    HelloSockets.Statix.histogram(
+      "pipeline.push_delivered",
+      Timing.unix_ms_now() - enqueued_at
+    )
+
+    {:noreply, socket}
+  end
+```
+
+We are using a histogram metric type to capture statistical information with our metric.
+
+Now, add this new event type to our JavaScript client.
+```javascript
+authUserChannel.on("push_timed", (payload) => {
+  console.log("received timed auth user push", payload)
+})
+```
+
+Start the server: `iex -S mix phx.server` and load `http://localhost:4000`.
+You'll see a histogram metric appear if you use the new Producer.push_timed function.
+
+```
+iex(2)> Producer.push_timed(%{data: %{n: 1}, user_id: 1})
+:ok
+iex(3)> StatsD metric: pipeline.worker.process_time 1001|ms
+StatsD metric: pipeline.push_delivered 1001|h
+```
+
+Try enqueueing a lot of messages to see the difference in time.
+```
+iex(7)> Enum.each((1..500), push)
+```
+
+The logs..
+```
+StatsD metric: pipeline.push_delivered 0|h
+...
+StatsD metric: pipeline.push_delivered 33|h
+```
+
+When I go from 10 to 1 max_demand, the timing increase. When I go from 10 to 100 max_demand, the timing decrease.
+
+## Test our Data Pipeline
+- in test/integration/pipeline_test.exs:
+```elixir
+defmodule Integration.PipelineTest do
+  use HelloSocketsWeb.ChannelCase, async: false
+
+  alias HelloSocketsWeb.AuthSocket
+  alias HelloSockets.Pipeline.Producer
+
+  defp connect_auth_socket(user_id) do
+    {:ok, _, %Phoenix.Socket{}} =
+      socket(AuthSocket, nil, %{user_id: user_id})
+      |> subscribe_and_join("user:#{user_id}", %{})
+  end
+
+  test "event are pushed from begining to end correctly" do
+    connect_auth_socket(1)
+
+    Enum.each(1..10, fn n ->
+      Producer.push_timed(%{data: %{n: n}, user_id: 1})
+      assert_push "push_timed", %{n: ^n}
+    end)
+  end
+
+  test "an event is not delivered to the wrong user" do
+    connect_auth_socket(2)
+
+    Producer.push_timed(%{data: %{test: true}, user_id: 1})
+    refute_push "push_timed", %{test: true}
+  end
+end
+```
+
+Now, add test configuration for StatsD.
+- in config/test.exs:
+`config :statix, HelloSockets.Statix, port: 8127`
+
+Finally, add metric test:
+```elixir
+  test "events are timed on delivery" do
+    assert {:ok, _} = StatsDLogger.start_link(port: 8127, formatter: :send)
+    connect_auth_socket(1)
+
+    Producer.push_timed(%{data: %{test: true}, user_id: 1})
+
+    assert_push "push_timed", %{test: true}
+    assert_receive {:statsd_recv, "pipeline.push_delivered", _value}
+  end
+```
+
+Run `mix test test/integration`.
+
+### The Power of GenStage
+- Enforce stricter delivery guarantees for messages
+- Augment an outgoing message with data from a database
+- Equitable dispatching between users: Our GenStage-based pipeline will currently send items on a first-come-first-served basis. This is great for most applications, but it could be problematic in an environment where a single user (or team of users) has significantly more messages than other users. In this scenario, all users would become slower due to the effect of a single user.
+
+GenStage allows us to write a custom Dispatcher module capable of routing messages in any way we want. We could leverage this to isolate users that are taking over the systam's capacity onto a single worker. We wouldn't need to change any existing part of our application other than our Producer and Consumer modules.

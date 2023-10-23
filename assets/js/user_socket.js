@@ -192,6 +192,10 @@ authUserChannel.on("push", (payload) => {
   console.log("received auth user push", payload)
 })
 
+authUserChannel.on("push_timed", (payload) => {
+  console.log("received timed auth user push", payload)
+})
+
 authUserChannel.join()
 
 export default socket
