@@ -5,8 +5,14 @@ defmodule HelloSockets.Application do
 
   use Application
 
+  alias HelloSockets.Pipeline.Producer
+  alias HelloSockets.Pipeline.ConsumerSupervisor, as: Consumer
+
   @impl true
   def start(_type, _args) do
+    # Connect Statix to StatsD server.
+    :ok = HelloSockets.Statix.connect()
+
     children = [
       # Start the Telemetry supervisor
       HelloSocketsWeb.Telemetry,
@@ -15,6 +21,8 @@ defmodule HelloSockets.Application do
       # Start Finch
       {Finch, name: HelloSockets.Finch},
       # Start the Endpoint (http/https)
+      {Producer, name: Producer},
+      {Consumer, subscribe_to: [{Producer, max_demand: 10, min_demand: 5}]},
       HelloSocketsWeb.Endpoint
       # Start a worker by calling: HelloSockets.Worker.start_link(arg)
       # {HelloSockets.Worker, arg}

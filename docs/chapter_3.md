@@ -1,113 +1,4 @@
-# Phoenix Channels
-
-## Chapter 2
-### Project setup
-
-Creating project:
-<br>
-- `mix phx.new hello_sockets --no-ecto`
-
-Understand phoenix channels:
-<br>
-- `mix help phx.gen.channel`
-
-Creating phoenix channel called User:
-<br>
-- `mix phx.gen.channel User`
-
-Running this command will create theses files:
-* creating lib/hello_sockets_web/channels/user_channel.ex
-* creating test/hello_sockets_web/channels/user_channel_test.exs
-* creating test/support/channel_case.ex
-
-If socket handler is not find, the prompt will ask for create:
-
-* The default socket handler - HelloSocketsWeb.UserSocket - was not found.
-* Do you want to create it? [Yn] Y
-
-Now, the following files will be created:
-* creating lib/hello_sockets_web/channels/user_socket.ex
-* creating assets/js/user_socket.js
-
-- Add the handler to endpoint file:
-```elixir
-  socket "/socket", HelloSocketsWeb.UserSocket,
-    websocket: true,
-    longpoll: false
-```
-
-- For the front-end integration, you need to import the `user_socket.js` in your `assets/js/app.js` file:
-<br>
-`import "./user_socket.js"`
-
-
-### Understand what happens
-
-Run project:
-- `mix phx.server`
-
-Now, go in browser and access `http://localhost:4000`. Inspecting the page (right button click and select Inspect) in Network tab, we can see the WebSockets(WS) connections. If necessary, reload the page.
-
-We may see a default phoenix websocket connection, for hot-reload, and the connection labeled `websocket?token=undefined&vsn=2.0.0`.
-
-A WebSocket starts its life as a normal web request that becomes "upgraded" to a WebSocket.
-
-Right-click on `websocket?token=undefined&vsn=2.0.0`, and copy as cURL.
-We will have this:
-```bash
-curl 'ws://localhost:4000/socket/websocket?token=undefined&vsn=2.0.0' \
-  -H 'Pragma: no-cache' \
-  -H 'Origin: http://localhost:4000' \
-  -H 'Accept-Language: en-US,en;q=0.9' \
-  -H 'Sec-WebSocket-Key: PAlvCbC8VR7NbGH4NmeYPA==' \
-  -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36' \
-  -H 'Upgrade: websocket' \
-  -H 'Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits' \
-  -H 'Cache-Control: no-cache' \
-  -H 'Cookie: _hello_sockets_key=SFMyNTY.g3QAAAABbQAAAAtfY3NyZl90b2tlbm0AAAAYR3ZyTVFURnk3NVA4dXkwR1VFanZhM3Ex.yuPTZBAyJsdtwJWLreroH8mb2tTRK1JKVvabRiYwiHg' \
-  -H 'Connection: Upgrade' \
-  -H 'Sec-WebSocket-Version: 13' \
-  --compressed
-```
-
-Replace ws:// with http://, add -i flag and run the following curl command in terminal:
-```bash
-curl -i 'http://localhost:4000/socket/websocket?token=undefined&vsn=2.0.0' \
-  -H 'Pragma: no-cache' \
-  -H 'Origin: http://localhost:4000' \
-  -H 'Accept-Language: en-US,en;q=0.9' \
-  -H 'Sec-WebSocket-Key: PAlvCbC8VR7NbGH4NmeYPA==' \
-  -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36' \
-  -H 'Upgrade: websocket' \
-  -H 'Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits' \
-  -H 'Cache-Control: no-cache' \
-  -H 'Cookie: _hello_sockets_key=SFMyNTY.g3QAAAABbQAAAAtfY3NyZl90b2tlbm0AAAAYR3ZyTVFURnk3NVA4dXkwR1VFanZhM3Ex.yuPTZBAyJsdtwJWLreroH8mb2tTRK1JKVvabRiYwiHg' \
-  -H 'Connection: Upgrade' \
-  -H 'Sec-WebSocket-Version: 13' \
-  --compressed
-```
-
-Our web request has received a 101 HTTP response from the server, which indecates that the connection rotocol changes from http to a WebSocket.
-In server terminal we can see the log:
-```bash
-[info] CONNECTED TO HelloSocketsWeb.UserSocket in 100µs
-  Transport: :websocket
-  Serializer: Phoenix.Socket.V2.JSONSerializer
-  Parameters: %{"token" => "undefined", "vsn" => "2.0.0"}
-```
-
-The diagram of the WebSocket connection:
-```puml
-Client -> Server : http upgraded request.
-Server -> Client : http 101 response.
-Client <-> Server : Bidirectional messages.
-```
-
-The connection cannot be upgraded with cURL, so we'll move back to DevTools for seeing the data exchange.
-
-Phoenix and Elixir make it easy to have tens of thousands of connections on a single server. Each connected Channel and WebSocket in your application has independent memory management and garbage coolection because of OTP processes. An advantage of this process-based architecture is that WebSocket connections eith are not being used often can be stored in a hibernated state, which consumes very little memory.
-
-## Chapter 3
+# First steps with Phoenix Channel
 
 The client will subscribe to topic in server. After that the bidirectional messages can occurs.
 One of the benefits of Channels is that they are transport agnostic.
@@ -388,3 +279,134 @@ then, the client receive the message:
 It is bes practice to not write an intercepted event if you do not need to customize the payload because it will decrease performance in a system with a lot of subscribers.
 
 ### Channel Clients
+Responsabilities of channel clients:
+- Connect to the server and maintain the connection by using a heartbeat.
+- Join the requested topics.
+- Push messages to a topic and optionally handle responses.
+- Receive messages from a topic.
+- Handle disconnection and other errors gracefully; try to maintain a connection whenever possible.
+
+Let's send message with the javascript client.
+Update user_socket.j file to this:
+```js
+import {Socket} from "phoenix"
+
+let socket = new Socket("/socket", {})
+socket.connect()
+
+// Connecto to topic ping.
+let channel = socket.channel("ping", {})
+channel.join()
+  .receive("ok", resp => { console.log("Joined ping", resp) })
+  .receive("error", resp => { console.log("Unable to join ping", resp) })
+
+export default socket
+
+```
+
+We initialize our Socket with the URL that is present in outr Endpoint module (/socket).
+We invoke socket.channel function once per topic we want to connect to. The javascript client will prevent us from connecting to the same topic multiple times on one Socket connection, which prevents duplicate messages.
+
+Start application:
+`iex -S mix phx.server`
+
+then access link:
+`http://localhost:4000`
+
+You will see the message in console tab:
+`Joined ping`
+
+Now, add code at the bottom in user_socket.js to send message to server:
+```js
+// Sending message.
+console.log("send ping")
+channel
+  .push("ping")
+  .receive("ok", resp => console.log("receive", resp.ping))
+```
+
+Refresh the page, and you will see something like this:
+```
+send ping
+Joined ping {}
+receive pong
+```
+
+Note that the ping is sent before our joined reply comes in. In javascript, if the client hasn't connected to the Channel yet, the message will be buffered in memory and sent as soon as the Channel is connected. It is stored in a short-lived(5-second) buffer so that is doesn't immediately fail.
+
+It is a best practice to have error and timeout handlers whenever a message is sent to our Channel.
+Add the following code to user_socket.js fild:
+```js
+// Send pong.
+console.log("send pong")
+channel
+  .push("pong")
+  .receive("ok", resp => console.log("won't happen"))
+  .receive("error", resp => console.error("won't happen yet"))
+  .receive("timeout", resp => console.error("pong message timeout", resp))
+```
+
+Refresh the page and the timeout message will appear.
+
+Now, add code in ping_channel.ex file:
+```elixir
+  def handle_in("param_ping", %{"error" => true}, socket) do
+    {:reply, {:error, %{reason: "You asked for this!"}}, socket}
+  end
+
+  def handle_in("param_ping", payload, socket) do
+    {:reply, {:ok, payload}, socket}
+  end
+```
+
+and in user_socket.js file:
+```js
+channel
+.push("param_ping", {error: true})
+.receive("error", resp => console.error("param_ping error: ", resp))
+
+channel
+  .push("param_ping", {error: false, arr: [1, 2]})
+  .receive("ok", resp => console.log("param_ping ok: ", resp))
+```
+
+Refresh the page and look the logs in console tab.
+
+### Receiving messages from server
+Now, let's implement receiving messages from server.
+In user_socket.js file add a listener:
+```js
+// Listener to listen send_ping event..
+channel.on("send_ping", payload => {
+  console.log("ping requested", payload)
+  channel.push("ping")
+    .receive("ok", resp => console.log("ping: ", resp.ping))
+})
+```
+
+In console, run:
+`HelloSocketsWeb.Endpoint.broadcast("ping", "request_ping", %{})`
+
+This will cause a message to be pushed to all connected clients on the "ping" topic. Our hadle_out function changes the original request_ping payload into a different message. You can see the final result in the developer console.
+
+```
+ping requested {from_node: 'nonode@nohost'}
+ping:  pong
+```
+
+When we open multiple web pages, the broadcast message will be sent to all pages. Replies, on the other hand, will only be sent to the client thate sent the message.
+
+### Client fault tolerance and error handling
+When you stop the server, errors messages will appear in browser console tab. When server restarts the javascript client join to the topic again.
+
+Add code in user_socket.js:
+```js
+// Send invalid event.
+channel
+  .push("invalid")
+  .receive("ok", resp => console.log("won't happen"))
+  .receive("error", resp => console.error("won't happen yet"))
+  .receive("timeout", resp => console.error("invalid event timeout", resp))
+```
+
+With it, the erro message will appear in iex console.
