@@ -179,23 +179,33 @@ socket.connect()
 // console.log("5 parallel slow pings requested")
 
 // Push data to a particular user and use GenStage producer and consumer.
-const authSocket = new Socket("/auth_socket", {
-  params: {token: window.authToken}
+// const authSocket = new Socket("/auth_socket", {
+//   params: {token: window.authToken}
+// })
+
+// authSocket.onOpen(() => console.log('authSocket connected'))
+// authSocket.connect()
+
+// const authUserChannel = authSocket.channel(`user:${window.userId}`)
+
+// authUserChannel.on("push", (payload) => {
+//   console.log("received auth user push", payload)
+// })
+
+// authUserChannel.on("push_timed", (payload) => {
+//   console.log("received timed auth user push", payload)
+// })
+
+// authUserChannel.join()
+
+// Tracked channels.
+const trackedSocket = new Socket("/auth_socket", {
+  params: { token: window.authToken}
 })
 
-authSocket.onOpen(() => console.log('authSocket connected'))
-authSocket.connect()
+trackedSocket.connect()
 
-const authUserChannel = authSocket.channel(`user:${window.userId}`)
-
-authUserChannel.on("push", (payload) => {
-  console.log("received auth user push", payload)
-})
-
-authUserChannel.on("push_timed", (payload) => {
-  console.log("received timed auth user push", payload)
-})
-
-authUserChannel.join()
+const trackerChannel = trackedSocket.channel('tracked')
+trackerChannel.join()
 
 export default socket

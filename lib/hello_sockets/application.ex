@@ -23,7 +23,8 @@ defmodule HelloSockets.Application do
       # Start the Endpoint (http/https)
       {Producer, name: Producer},
       {Consumer, subscribe_to: [{Producer, max_demand: 10, min_demand: 5}]},
-      HelloSocketsWeb.Endpoint
+      HelloSocketsWeb.Endpoint,
+      {HelloSocketsWeb.UserTracker, [pool_size: :erlang.system_info(:schedulers_online)]}
       # Start a worker by calling: HelloSockets.Worker.start_link(arg)
       # {HelloSockets.Worker, arg}
     ]
