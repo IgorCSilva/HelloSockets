@@ -165,3 +165,8 @@ iex()> HelloSocketsWeb.UserTracker.list()
 ```
 
 ## Phoenix Tracker Versus Presence
+Phoenix Presence is an implementation of Tracker that provides helper function for working with Channels.
+
+If you want to have every change broadcast to clients on a given topic, then use Presence. If you want to be a in control of how diffs are handled, or if you don't want to bradcast changes to clients, use Tracker.
+
+Now go to the sneakers23 project again...
